@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>zed_common</name>
+  <version>0.0.1</version>
+  <description>zed_perception / zed_mission이 공유하는 설정/좌표변환/미션 데이터 라이브러리</description>
+  <maintainer email="kyh031106@gmail.com">yonghwa</maintainer>
+  <license>MIT</license>
+  <export><build_type>ament_python</build_type></export>
+</package>
