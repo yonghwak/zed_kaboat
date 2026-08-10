@@ -20,6 +20,8 @@ setup(
         'console_scripts': [
             'path_planner_node = zed_mission.path_planner_node:main',
             'helm_node = zed_mission.helm_node:main',
+            'safety_supervisor_node = zed_mission.safety_supervisor_node:main',
+            'mission_manager_node = zed_mission.mission_manager_node:main',
             'thruster_output = zed_mission.thruster_output:main',
             'dashboard_node = zed_mission.dashboard_node:main',
         ],

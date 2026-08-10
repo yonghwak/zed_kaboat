@@ -17,6 +17,7 @@ from flask import Flask, Response, request, jsonify
 from zed_common import config
 from zed_common import mission_targets as mt
 from zed_common import path_planner as pp
+from zed_common import mission_state as ms
 from zed_common.coord_utils import FloorPlanMeta, world_to_pixel, in_bounds, pixel_to_world
 
 KR_FONT_PATH = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
@@ -317,15 +318,22 @@ PAGE = """
 <style>
 body{font-family:sans-serif;background:#111;color:#eee;margin:0;display:flex}
 .col{padding:8px} img{max-width:45vw;border:1px solid #444}
-#targets{list-style:none;padding:0}
-#targets li{padding:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+#targets{list-style:none;padding:4px;margin:0;position:fixed;right:8px;bottom:8px;width:220px;
+  max-height:200px;overflow-y:auto;background:#000;border:1px solid #444;font-size:11px;z-index:10}
+#targets li{padding:2px 4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
 #targets li.active{color:#0f0;font-weight:bold}
 #targets li span.del{color:#f55;padding:0 8px;cursor:pointer;font-weight:bold}
 #pathinfo{margin-top:12px;color:#0cf}
 </style></head><body>
 <div class="col"><h3>Floor Plan (클릭해서 목표 등록)</h3>
 <img id="mapimg" src="/stream/map"><ul id="targets"></ul>
-<div id="pathinfo"></div></div>
+<div id="pathinfo"></div>
+<div id="modectrl" style="margin-top:12px">
+  <button onclick="setMode('gate_follow')">항로추종 모드</button>
+  <button onclick="startStationKeep()">위치유지 시작(현재 활성목표)</button>
+  <button onclick="setMode('idle')">정지</button>
+  <div id="modeinfo" style="margin-top:6px;color:#ff0"></div>
+</div></div>
 <div class="col"><h3>AR Camera View</h3><img src="/stream/cam"></div>
 <script>
 async function refreshTargets(){
@@ -357,7 +365,26 @@ document.getElementById('mapimg').addEventListener('click', async (e)=>{
     body:JSON.stringify({u,v,name})});
   refreshTargets();
 });
+async function refreshMode(){
+  const mr = await fetch('/api/mode'); const md = await mr.json();
+  let txt = `모드: ${md.mode}` + (md.station_target ? ` (목표: ${md.station_target})` : '');
+  if (md.mode === 'station_keep') {
+    const sr = await fetch('/api/station_progress'); const sd = await sr.json();
+    txt += ` | 유지 ${sd.held_seconds}s / ${5.0}s` + (sd.success ? ' ✅성공' : '');
+  }
+  document.getElementById('modeinfo').textContent = txt;
+}
+function setMode(mode, target){
+  fetch('/api/set_mode',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mode:mode, station_target: target||null})}).then(refreshMode);
+}
+async function startStationKeep(){
+  const r = await fetch('/api/targets'); const d = await r.json();
+  if(!d.active){ alert('먼저 목표를 하나 클릭해서 활성화하세요'); return; }
+  setMode('station_keep', d.active);
+}
 refreshTargets(); setInterval(refreshTargets, 3000);
+refreshMode(); setInterval(refreshMode, 1000);
 </script></body></html>
 """
 
@@ -395,6 +422,23 @@ def api_targets():
 def api_path():
     node._reload_path()
     return jsonify({"path": node.path, "current_index": node.current_gate_idx})
+
+
+@app.route('/api/mode')
+def api_mode():
+    return jsonify(ms.load_mode())
+
+
+@app.route('/api/set_mode', methods=['POST'])
+def api_set_mode():
+    d = request.json
+    ms.save_mode(d.get('mode', 'idle'), d.get('station_target'))
+    return jsonify({"ok": True})
+
+
+@app.route('/api/station_progress')
+def api_station_progress():
+    return jsonify(ms.load_station_progress())
 
 
 @app.route('/api/active', methods=['POST'])

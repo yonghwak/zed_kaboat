@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>zed_bringup</name>
+  <version>0.0.1</version>
+  <description>zed_perception + zed_mission 노드 한 번에 실행</description>
+  <maintainer email="kyh031106@gmail.com">yonghwa</maintainer>
+  <license>MIT</license>
+  <exec_depend>zed_perception</exec_depend>
+  <exec_depend>zed_mission</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
