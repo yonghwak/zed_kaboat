@@ -1,8 +1,10 @@
 """
 mission_mode 토픽(transient_local)으로 받은 모드에 따라 cmd_final(Twist)을 다르게 발행한다.
-- gate_follow: mission_path.json의 현재 게이트를 향해 이동 (기존 동작)
+- gate_follow: 매 tick 실시간으로 전방 빨강/초록 부표쌍을 찾아 중앙선 추종(반응형).
+  더 이상 유효 쌍이 안 보이면(GATE_END_TIMEOUT_SEC) 미션 종료로 판정.
 - station_keep: 지정된 목표 반경(5m) 안에서 5초 연속 대기, 벗어나면 살짝 복귀
 - search: 지정된 목표를 반경만큼 거리를 두고 원형으로 주회, 1바퀴 채우면 성공
+- dock: 도킹 표식(색/모양)에 접근, 근접거리에서 일정시간 정지하면 도킹 완료
 - idle: 정지
 
 모드값은 더 이상 제어 루프에서 파일로 폴링하지 않고 mission_mode 토픽 구독으로 받는다
@@ -20,7 +22,6 @@ from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import String as RosString
 
 from zed_common import config
-from zed_common import path_planner as pp
 from zed_common import mission_targets as mt
 from zed_common import mission_state as ms
 
@@ -44,6 +45,7 @@ class HelmNode(Node):
         self.dock_hold_start = None  # rclpy Time or None
         self.mode_data = {"mode": "gate_follow", "station_target": None}
         self.mission_params = {"docking_color": None, "docking_shape": None, "search_color": "red"}
+        self.gate_last_seen_time = None  # rclpy Time or None - 마지막으로 유효 게이트쌍 본 시각
 
         self.pub = self.create_publisher(Twist, 'cmd_mission', 10)
         self.create_subscription(PoseStamped, config.POSE_TOPIC, self.on_pose, 20)
@@ -107,17 +109,20 @@ class HelmNode(Node):
         elif mode == "scan":
             self.station_hold_start = None
             self.dock_hold_start = None
+            self.gate_last_seen_time = None
             twist = Twist()
             twist.angular.z = config.MISSION_ZONE_SCAN_ANGULAR
             self.pub.publish(twist)
         else:
             self.station_hold_start = None
             self.dock_hold_start = None
+            self.gate_last_seen_time = None
             self.pub.publish(Twist())
 
     def _tick_goto(self, x, y, yaw, target_name):
         self.station_hold_start = None
         self.dock_hold_start = None
+        self.gate_last_seen_time = None
         targets = mt.load_targets()
         twist = Twist()
         if not target_name or target_name not in targets:
@@ -136,32 +141,70 @@ class HelmNode(Node):
         self.pub.publish(twist)
 
     def _tick_gate_follow(self, x, y, yaw):
+        """path_planner 기반 사전계획 대신, 매 tick마다 등록된 buoy_red_*/buoy_green_* 중
+        전방(GATE_FRONT_CONE_DEG 안)에 있고 서로 GATE_MAX_PAIR_DIST_M 이내로 가까운 쌍을
+        실시간으로 찾아 그 중앙점으로 조향한다. 가장 가까운(중앙점 거리 기준) 쌍을 선택.
+        GATE_END_TIMEOUT_SEC 동안 연속으로 유효 쌍이 안 보이면 미션 종료(success)로 판정 —
+        바다처럼 넓은 구간에서 게이트가 멀리서부터 안 보일 수 있어서, 사전 경로 대신
+        실시간 인식 기반으로 동작하는 게 더 맞음."""
         self.station_hold_start = None
         self.dock_hold_start = None
-        path = pp.load_path()
-        progress = pp.load_progress()
-        idx = progress.get("current_gate_idx", 0)
-
+        targets = mt.load_targets()
         twist = Twist()
-        if not path or idx >= len(path):
+
+        reds = {n: t for n, t in targets.items() if n.startswith("buoy_red_")}
+        greens = {n: t for n, t in targets.items() if n.startswith("buoy_green_")}
+
+        half_cone = math.radians(config.GATE_FRONT_CONE_DEG / 2.0)
+        best_pair = None
+        best_mid_dist = None
+        for rn, rt in reds.items():
+            r_bearing, r_dist = self._bearing_dist(x, y, yaw, rt['x'], rt['y'])
+            if r_dist > config.GATE_MAX_CONSIDER_DIST_M or abs(r_bearing) > half_cone:
+                continue
+            for gn, gt in greens.items():
+                g_bearing, g_dist = self._bearing_dist(x, y, yaw, gt['x'], gt['y'])
+                if g_dist > config.GATE_MAX_CONSIDER_DIST_M or abs(g_bearing) > half_cone:
+                    continue
+                pair_width = math.hypot(rt['x'] - gt['x'], rt['y'] - gt['y'])
+                if pair_width > config.GATE_MAX_PAIR_DIST_M:
+                    continue
+                mid_dist = (r_dist + g_dist) / 2.0
+                if best_mid_dist is None or mid_dist < best_mid_dist:
+                    best_mid_dist = mid_dist
+                    best_pair = (rt, gt)
+
+        now = self.get_clock().now()
+        if best_pair is None:
+            if self.gate_last_seen_time is None:
+                self.gate_last_seen_time = now  # 시작부터 안 보였으면 지금부터 카운트 시작
+            no_gate_sec = (now - self.gate_last_seen_time).nanoseconds / 1e9
+            success = no_gate_sec >= config.GATE_END_TIMEOUT_SEC
+            ms.save_gate_progress(success)
+            if success:
+                self.pub.publish(twist)  # 미션 종료 판정 - 정지, 다음 미션 전환은 mission_manager가 처리
+                return
+            # 타임아웃 전이면 마지막 알던 방향(직전 twist 유지 대신) 감속 직진하며 재탐색 대기
+            twist.linear.x = config.HELM_LINEAR_MAX * 0.3
             self.pub.publish(twist)
             return
 
-        gate = path[idx]
-        bearing, dist = self._bearing_dist(x, y, yaw, gate['x'], gate['y'])
+        self.gate_last_seen_time = now
+        ms.save_gate_progress(False)
+        rt, gt = best_pair
+        mid_x = (rt['x'] + gt['x']) / 2.0
+        mid_y = (rt['y'] + gt['y']) / 2.0
+        bearing, dist = self._bearing_dist(x, y, yaw, mid_x, mid_y)
         angular = max(-config.HELM_ANGULAR_MAX, min(config.HELM_ANGULAR_MAX,
                                                       config.HELM_KP_ANGULAR * bearing))
         forward_scale = max(0.0, math.cos(bearing))
-        linear = config.HELM_LINEAR_MAX * forward_scale
-        if dist < config.GATE_REACHED_DIST_M:
-            linear *= 0.5
-
-        twist.linear.x = linear
+        twist.linear.x = config.HELM_LINEAR_MAX * forward_scale
         twist.angular.z = angular
         self.pub.publish(twist)
 
     def _tick_station_keep(self, x, y, yaw, target_name):
         self.dock_hold_start = None
+        self.gate_last_seen_time = None
         targets = mt.load_targets()
         twist = Twist()
 
@@ -207,6 +250,7 @@ class HelmNode(Node):
         반대로 돌면 SEARCH_DIRECTION_BY_COLOR 값을 뒤집거나 부호를 반전할 것."""
         self.station_hold_start = None
         self.dock_hold_start = None
+        self.gate_last_seen_time = None
         targets = mt.load_targets()
         twist = Twist()
 
@@ -252,6 +296,7 @@ class HelmNode(Node):
         후보를 우선 선택 (여러 도킹 스테이션 중 지금 이 존의 것을 정확히 집기 위함), 없으면 배 현재
         위치 기준 최근접. DOCKING_ARRIVE_DIST_M 이내에서 DOCKING_HOLD_SEC 이상 연속 정지하면 도킹 완료."""
         self.station_hold_start = None
+        self.gate_last_seen_time = None
         twist = Twist()
 
         dt = self.mission_params
