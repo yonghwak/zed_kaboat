@@ -33,4 +33,6 @@ def generate_launch_description():
              name='thruster_output', output='screen'),
         Node(package='zed_mission', executable='dashboard_node',
              name='dashboard_node', output='screen'),
+        Node(package='zed_mission', executable='mission_params_node',
+             name='mission_params_node', output='screen'),
     ])
