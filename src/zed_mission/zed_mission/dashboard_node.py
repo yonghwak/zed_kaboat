@@ -351,25 +351,10 @@ body{font-family:sans-serif;background:#111;color:#eee;margin:0;display:flex}
   <button onclick="setMode('idle')">정지</button>
   <div id="modeinfo" style="margin-top:6px;color:#ff0"></div>
 </div>
-<div id="dockctrl" style="margin-top:12px;font-size:12px">
-  도킹 표식: <select id="dockColor">
-    <option value="red">빨강</option><option value="green">초록</option>
-    <option value="blue">파랑</option><option value="orange">주황</option>
-    <option value="yellow">노랑</option>
-  </select>
-  <select id="dockShape">
-    <option value="triangle">삼각형</option><option value="circle">원형</option>
-    <option value="square">네모</option>
-  </select>
-  <button onclick="setDockingTarget()">지정</button>
-  <span id="dockinfo" style="color:#0cf"></span>
-</div>
-<div id="searchctrl" style="margin-top:8px;font-size:12px">
-  탐색 목표색(수동 마커용): <select id="searchColor">
-    <option value="red">빨강(시계)</option><option value="green">초록(시계)</option>
-    <option value="white">흰색(반시계)</option>
-  </select>
-  <button onclick="setSearchColor()">지정</button>
+<div style="margin-top:12px;font-size:12px;color:#888">
+  도킹 표식(색/모양)·탐색 목표색 지정은 별도 페이지에서:
+  <a href="#" id="paramsLink" style="color:#0cf">미션 파라미터 페이지</a>
+  <span id="dockinfo" style="color:#0cf;display:block;margin-top:4px"></span>
 </div>
 </div>
 <div class="col"><h3>AR Camera View</h3><img src="/stream/cam"></div>
@@ -421,13 +406,7 @@ async function startStationKeep(){
   if(!d.active){ alert('먼저 목표를 하나 클릭해서 활성화하세요'); return; }
   setMode('station_keep', d.active);
 }
-async function setDockingTarget(){
-  const color = document.getElementById('dockColor').value;
-  const shape = document.getElementById('dockShape').value;
-  await fetch('/api/set_docking_target',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({color, shape})});
-  refreshDock();
-}
+document.getElementById('paramsLink').href = `http://${location.hostname}:8081/`;
 async function refreshDock(){
   const r = await fetch('/api/docking_target'); const d = await r.json();
   let txt = d.color ? `표식: ${d.color}/${d.shape}` : '표식 미지정';
@@ -436,11 +415,6 @@ async function refreshDock(){
     txt += pd.docked ? ` | ✅도킹완료(${pd.target})` : ' | 접근중';
   }
   document.getElementById('dockinfo').textContent = txt;
-}
-async function setSearchColor(){
-  const color = document.getElementById('searchColor').value;
-  await fetch('/api/set_search_color',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({color})});
 }
 refreshTargets(); setInterval(refreshTargets, 3000);
 refreshMode(); setInterval(refreshMode, 1000);
@@ -501,13 +475,6 @@ def api_docking_target():
     return jsonify(ms.load_docking_target())
 
 
-@app.route('/api/set_docking_target', methods=['POST'])
-def api_set_docking_target():
-    d = request.json
-    ms.save_docking_target(d.get('color'), d.get('shape'))
-    return jsonify({"ok": True})
-
-
 @app.route('/api/docking_progress')
 def api_docking_progress():
     return jsonify(ms.load_docking_progress())
@@ -516,13 +483,6 @@ def api_docking_progress():
 @app.route('/api/search_color')
 def api_search_color():
     return jsonify(ms.load_search_color())
-
-
-@app.route('/api/set_search_color', methods=['POST'])
-def api_set_search_color():
-    d = request.json
-    ms.save_search_color(d.get('color', 'red'))
-    return jsonify({"ok": True})
 
 
 @app.route('/api/station_progress')
