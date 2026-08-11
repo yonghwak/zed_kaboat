@@ -2,8 +2,13 @@
 기존 camera_node가 발행하는 camera/detections(색+모양+각도+거리, JSON)를
 현재 pose와 결합해서 world 좌표로 바꾸고 mission_targets에 자동 등록한다.
 
-- 원형(circle) + 빨강/초록/흰색  -> "buoy_<색>_<n>" (게이트/항로 표식용)
-- 그 외 모양+색 조합             -> "dock_<색>_<모양>_<n>" (도킹 표식용)
+분류 기준은 색상이 아니라 모양이다:
+- 원형(circle) -> "buoy_<색>_<n>"  (물에 뜬 둥근 물체 = 부표. 색상은 무관하게 전부 buoy로)
+- 그 외 모양(삼각형/네모/십자) -> "dock_<색>_<모양>_<n>" (도킹 스테이션 고정 표식)
+
+도킹 표식이 원형으로 공지되는 경우도 있어서(규정상 삼각형/원형/네모 모두 가능),
+그 경우 도킹 대상은 dock_ 네임스페이스가 아니라 buoy_<색>_<n>으로 등록됨 —
+helm_node의 도킹 로직이 이 경우 buoy_ 쪽도 함께 탐색한다.
 
 오탐 방지: 감지 즉시 등록하지 않고, 같은 위치(BUOY_DEDUP_DIST_M 이내)에서
 TARGET_CONFIRM_HITS번 연속 감지된 후보만 실제 mission_targets에 확정 등록한다.
@@ -24,8 +29,6 @@ from zed_common import config
 from zed_common import mission_targets as mt
 
 COLOR_NAME = {'R': 'red', 'G': 'green', 'B': 'blue', 'O': 'orange', 'Y': 'yellow', 'W': 'white'}
-GATE_BUOY_SHAPE = 'circle'
-GATE_BUOY_COLORS = ('red', 'green', 'white')
 
 
 def quat_to_yaw(x, y, z, w):
@@ -85,9 +88,11 @@ class PerceptionBridgeNode(Node):
             wx = cam_x + local_fwd * math.cos(yaw) - local_left * math.sin(yaw)
             wy = cam_y + local_fwd * math.sin(yaw) + local_left * math.cos(yaw)
 
-            if shape == GATE_BUOY_SHAPE and color in GATE_BUOY_COLORS:
+            if shape == 'circle':
+                # 원형 = 물에 뜬 부표. 색상 상관없이 전부 buoy 네임스페이스로.
                 prefix = f"buoy_{color}"
             else:
+                # 원형이 아니면 도킹 스테이션 고정 표식.
                 prefix = f"dock_{color}_{shape}"
 
             dup = any(
