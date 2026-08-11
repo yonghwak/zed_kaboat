@@ -81,3 +81,15 @@ def save_search_progress(angle_deg, laps, success, target, path=config.SEARCH_PR
     with open(path, "w") as f:
         json.dump({"angle_deg": round(angle_deg, 1), "laps": round(laps, 2),
                    "success": success, "target": target}, f)
+
+
+def load_search_color(path=config.SEARCH_COLOR_PATH):
+    if not os.path.exists(path):
+        return {"color": "red"}
+    with open(path) as f:
+        return json.load(f)
+
+
+def save_search_color(color, path=config.SEARCH_COLOR_PATH):
+    with open(path, "w") as f:
+        json.dump({"color": color}, f)
