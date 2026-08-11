@@ -1,4 +1,5 @@
 import os
+import json
 import threading
 import time
 import math
@@ -8,9 +9,10 @@ import numpy as np
 from PIL import Image as PILImage, ImageDraw, ImageFont
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String as RosString
 from cv_bridge import CvBridge
 from flask import Flask, Response, request, jsonify
 
@@ -19,6 +21,10 @@ from zed_common import mission_targets as mt
 from zed_common import path_planner as pp
 from zed_common import mission_state as ms
 from zed_common.coord_utils import FloorPlanMeta, world_to_pixel, in_bounds, pixel_to_world
+
+MODE_QOS = QoSProfile(depth=1)
+MODE_QOS.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+MODE_QOS.reliability = QoSReliabilityPolicy.RELIABLE
 
 KR_FONT_PATH = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
 try:
@@ -92,6 +98,8 @@ class DashboardNode(Node):
         self._path_mtime = None
         self._progress_mtime = None
 
+        self.mode_pub = self.create_publisher(RosString, 'mission_mode', MODE_QOS)
+
         self.create_subscription(Image, config.IMAGE_TOPIC, self.on_image, qos_profile_sensor_data)
         self.create_subscription(CameraInfo, config.CAMERA_INFO_TOPIC, self.on_caminfo, qos_profile_sensor_data)
         self.create_subscription(PoseStamped, config.POSE_TOPIC, self.on_pose, 20)
@@ -99,6 +107,14 @@ class DashboardNode(Node):
         self._reload_floor_plan()
         self._reload_path(reset_progress=True)
         self.get_logger().info("대시보드 노드 시작")
+
+    def publish_mode(self, mode, station_target=None):
+        """웹 UI에서 수동으로 모드를 바꿀 때 씀. mission_manager_node가 살아있다면
+        다음 tick에 다시 덮어쓸 수 있으니, 수동 오버라이드는 매니저를 끈 상태에서 쓸 것."""
+        ms.save_mode(mode, station_target)
+        msg = RosString()
+        msg.data = json.dumps({"mode": mode, "station_target": station_target})
+        self.mode_pub.publish(msg)
 
     # ---- 리로드 ----
     def _reload_floor_plan(self):
@@ -432,7 +448,7 @@ def api_mode():
 @app.route('/api/set_mode', methods=['POST'])
 def api_set_mode():
     d = request.json
-    ms.save_mode(d.get('mode', 'idle'), d.get('station_target'))
+    node.publish_mode(d.get('mode', 'idle'), d.get('station_target'))
     return jsonify({"ok": True})
 
 
@@ -473,3 +489,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
