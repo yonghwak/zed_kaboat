@@ -25,6 +25,8 @@ class CameraNode(Node):
     COLOR_RANGES = {
         'G': ((35, 80, 60), (85, 255, 255)),
         'B': ((100, 100, 100), (130, 255, 255)),
+        # 흰색은 Hue 상관없이 채도(S) 낮고 명도(V) 높은 영역으로 판별
+        'W': ((0, 0, 190), (180, 40, 255)),
     }
     RED_RANGES = [
         ((0, 70, 60), (12, 255, 255)),
@@ -37,7 +39,7 @@ class CameraNode(Node):
     RGB_TOPIC = '/zed/zed_node/rgb/color/rect/image'
     DEPTH_TOPIC = '/zed/zed_node/depth/depth_registered'
 
-    DEBUG_COLORS_BGR = {'R': (0, 0, 255), 'G': (0, 255, 0), 'B': (255, 0, 0)}
+    DEBUG_COLORS_BGR = {'R': (0, 0, 255), 'G': (0, 255, 0), 'B': (255, 0, 0), 'W': (255, 255, 255)}
 
     def __init__(self):
         super().__init__('camera_node')
@@ -54,7 +56,7 @@ class CameraNode(Node):
         self.debug_pub = self.create_publisher(Image, 'camera/debug_image', 10)
         self.mask_pubs = {
             c: self.create_publisher(Image, f'camera/mask_{c}', 10)
-            for c in ['R', 'G', 'B']
+            for c in ['R', 'G', 'B', 'W']
         }
 
         self.get_logger().info(
@@ -87,9 +89,15 @@ class CameraNode(Node):
 
         kernel = np.ones((3, 3), np.uint8)
         kernel_g = np.ones((5, 5), np.uint8)   # 초록은 경계가 특히 지저분해서 더 세게
+        kernel_w = np.ones((5, 5), np.uint8)   # 흰색도 노이즈(파도 반사광 등) 많아서 세게
         for color_name, mask in all_masks.items():
             # 마스크 다듬기: 경계 노이즈(톱니현상) 줄여서 컨투어를 안정화
-            k = kernel_g if color_name == 'G' else kernel
+            if color_name == 'G':
+                k = kernel_g
+            elif color_name == 'W':
+                k = kernel_w
+            else:
+                k = kernel
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
 
