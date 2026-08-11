@@ -14,19 +14,25 @@ class CameraNode(Node):
     """
     ZED2i 카메라 - 완전 심플 버전.
     색 마스크 -> 컨투어 -> 꼭짓점 개수로만 모양 판별. 그 외 아무것도 없음.
+    등록색: 빨강(R)/초록(G)/파랑(B)/흰색(W)/주황(O)/노랑(Y) - 도킹 규정 5색(빨강/초록/
+    파랑/주황/노랑) + 탐색/게이트용 흰색까지 전부 커버.
     빨강이 안 잡히는 문제 원인 파악을 위해 각 색의 마스크를 그대로
-    'camera/mask_R', 'camera/mask_G', 'camera/mask_B'로 발행 - rosboard로
-    직접 눈으로 확인 가능 (전부 까맣게 나오면 색 자체가 안 잡히는 것,
-    흰 덩어리가 있는데 detections에 없으면 그다음 단계 문제).
+    'camera/mask_R' 등으로 발행 - rosboard로 직접 눈으로 확인 가능 (전부 까맣게
+    나오면 색 자체가 안 잡히는 것, 흰 덩어리가 있는데 detections에 없으면 그다음
+    단계 문제). 주황/노랑은 방금 추가한 값이라 실측 재캘리브레이션 필수.
     """
 
     # 빨강은 HSV 색상환 양끝(0근처, 180근처)에 걸쳐있어 두 범위를 따로 두고
     # OR로 합쳐 씀. 나머지는 단일 범위.
+    # 주황/노랑은 빨강(~0-12)과 초록(~35-85) 사이에 끼워넣음 - 서로 안 겹치게 값 확인 필요.
     COLOR_RANGES = {
         'G': ((35, 80, 60), (85, 255, 255)),
         'B': ((100, 100, 100), (130, 255, 255)),
         # 흰색은 Hue 상관없이 채도(S) 낮고 명도(V) 높은 영역으로 판별
         'W': ((0, 0, 190), (180, 40, 255)),
+        # 도킹 규정색(빨강/초록/파랑/주황/노랑) 중 빠져있던 두 개 - 실측 필수, 아래는 초기값
+        'O': ((13, 120, 70), (20, 255, 255)),
+        'Y': ((21, 100, 100), (33, 255, 255)),
     }
     RED_RANGES = [
         ((0, 70, 60), (12, 255, 255)),
@@ -39,7 +45,10 @@ class CameraNode(Node):
     RGB_TOPIC = '/zed/zed_node/rgb/color/rect/image'
     DEPTH_TOPIC = '/zed/zed_node/depth/depth_registered'
 
-    DEBUG_COLORS_BGR = {'R': (0, 0, 255), 'G': (0, 255, 0), 'B': (255, 0, 0), 'W': (255, 255, 255)}
+    DEBUG_COLORS_BGR = {
+        'R': (0, 0, 255), 'G': (0, 255, 0), 'B': (255, 0, 0), 'W': (255, 255, 255),
+        'O': (0, 140, 255), 'Y': (0, 255, 255),
+    }
 
     def __init__(self):
         super().__init__('camera_node')
@@ -56,7 +65,7 @@ class CameraNode(Node):
         self.debug_pub = self.create_publisher(Image, 'camera/debug_image', 10)
         self.mask_pubs = {
             c: self.create_publisher(Image, f'camera/mask_{c}', 10)
-            for c in ['R', 'G', 'B', 'W']
+            for c in ['R', 'G', 'B', 'W', 'O', 'Y']
         }
 
         self.get_logger().info(
@@ -94,7 +103,7 @@ class CameraNode(Node):
             # 마스크 다듬기: 경계 노이즈(톱니현상) 줄여서 컨투어를 안정화
             if color_name == 'G':
                 k = kernel_g
-            elif color_name == 'W':
+            elif color_name in ('W', 'O', 'Y'):
                 k = kernel_w
             else:
                 k = kernel
