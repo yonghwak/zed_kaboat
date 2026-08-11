@@ -10,11 +10,14 @@
 그 경우 도킹 대상은 dock_ 네임스페이스가 아니라 buoy_<색>_<n>으로 등록됨 —
 helm_node의 도킹 로직이 이 경우 buoy_ 쪽도 함께 탐색한다.
 
-오탐 방지: 감지 즉시 등록하지 않고, 같은 위치(BUOY_DEDUP_DIST_M 이내)에서
-TARGET_CONFIRM_HITS번 연속 감지된 후보만 실제 mission_targets에 확정 등록한다.
-후보는 TARGET_CANDIDATE_TIMEOUT_SEC 동안 재감지 안 되면 폐기됨. 이미 확정
-등록된 타겟은 만료시키지 않는다 (경로계획이 이미 그 타겟을 참조 중일 수 있어서
-미션 도중 사라지는 게 더 위험함).
+베스트맵을 불러와서 시작한 경우(mission_targets.json에 기대위치가 이미 있는 경우),
+같은 계열(prefix) 타겟이 근처(BUOY_DEDUP_DIST_M 이내)에서 다시 감지되면 새로 만들지
+않고 TARGET_UPDATE_ALPHA 비율로 그 좌표를 실측값 쪽으로 이동평균 보정한다 - 베스트맵의
+기대위치를 실측으로 다듬어가는 방식.
+
+오탐 방지(신규 등록만 해당): 감지 즉시 등록하지 않고, 같은 위치에서 TARGET_CONFIRM_HITS번
+연속 감지된 후보만 실제 mission_targets에 확정 등록한다. 후보는 TARGET_CANDIDATE_TIMEOUT_SEC
+동안 재감지 안 되면 폐기됨. 이미 확정 등록된 타겟(베스트맵 사전등록분 포함)은 만료시키지 않는다.
 """
 
 import json
@@ -95,11 +98,19 @@ class PerceptionBridgeNode(Node):
                 # 원형이 아니면 도킹 스테이션 고정 표식.
                 prefix = f"dock_{color}_{shape}"
 
-            dup = any(
-                math.hypot(t['x'] - wx, t['y'] - wy) < config.BUOY_DEDUP_DIST_M
-                for t in targets.values()
+            # 같은 계열(prefix)의 기존 확정 타겟이 근처에 있으면 새로 만들지 않고
+            # 그 좌표를 실측값 쪽으로 이동평균 보정 (베스트맵 기대위치 다듬기 포함)
+            existing_match = next(
+                (n for n, t in targets.items()
+                 if n.startswith(prefix) and math.hypot(t['x'] - wx, t['y'] - wy) < config.BUOY_DEDUP_DIST_M),
+                None
             )
-            if dup:
+            if existing_match is not None:
+                old = targets[existing_match]
+                alpha = config.TARGET_UPDATE_ALPHA
+                new_x = (1 - alpha) * old['x'] + alpha * wx
+                new_y = (1 - alpha) * old['y'] + alpha * wy
+                targets = mt.register_target(existing_match, new_x, new_y)
                 continue
 
             match_key = next(
