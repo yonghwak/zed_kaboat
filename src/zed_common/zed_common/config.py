@@ -98,14 +98,18 @@ DOCKING_PROGRESS_PATH = os.path.join(DATA_DIR, "docking_progress.json")
 DOCKING_ARRIVE_DIST_M = 0.8
 DOCKING_LINEAR_MAX = 0.25
 DOCKING_KP_ANGULAR = 1.5
+DOCKING_HOLD_SEC = 3.0   # 표식 근처에서 이만큼 연속 정지해야 도킹 완료로 판정
 
 # ---- 탐색 (부표 주회) ----
 SEARCH_PROGRESS_PATH = os.path.join(DATA_DIR, "search_progress.json")
+SEARCH_COLOR_PATH = os.path.join(DATA_DIR, "search_color.json")
 SEARCH_RADIUS_M = 3.0
 SEARCH_LINEAR_MAX = 0.3
 SEARCH_KP_ANGULAR = 1.2
 SEARCH_RADIAL_KP = 0.3
 SEARCH_LAPS_TARGET = 1.0
+# 규정: 빨강/초록 부표는 시계방향, 흰색 부표는 반시계방향
+SEARCH_DIRECTION_BY_COLOR = {"red": "cw", "green": "cw", "white": "ccw"}
 
 # ---- 타겟 오탐 필터링 (연속 감지 확정) ----
 TARGET_CONFIRM_HITS = 3          # 같은 위치에서 이만큼 연속 감지되어야 실제 등록
