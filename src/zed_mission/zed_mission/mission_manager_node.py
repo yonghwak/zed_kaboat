@@ -2,20 +2,27 @@
 mission_targets 중 "zone_<순번>_<종류>" 이름의 목표를 존으로 해석해서
 순서대로: 이동(goto) -> 도착 후 스캔(scan, 제자리 회전) -> 해당 미션 수행 -> 다음 존.
 
-지원 종류: stationkeep(위치유지), gate(항로추종 경로).
-그 외 종류(dock, search, obstacle 등)는 아직 미구현이라 잠깐 대기 후 건너뜀.
+지원 종류: stationkeep(위치유지), gate(항로추종 경로), search/circle(주회).
+그 외 종류(dock 등)는 아직 미구현이라 잠깐 대기 후 건너뜀.
 """
 
+import json
 import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String as RosString
 
 from zed_common import config
 from zed_common import mission_targets as mt
 from zed_common import mission_state as ms
 from zed_common import path_planner as pp
+
+MODE_QOS = QoSProfile(depth=1)
+MODE_QOS.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+MODE_QOS.reliability = QoSReliabilityPolicy.RELIABLE
 
 
 def parse_zone(name):
@@ -37,6 +44,8 @@ class MissionManagerNode(Node):
         self.state = "idle"
         self.state_since = self.get_clock().now()
 
+        self.mode_pub = self.create_publisher(RosString, 'mission_mode', MODE_QOS)
+
         self.create_subscription(PoseStamped, config.POSE_TOPIC, self.on_pose, 20)
         self.create_timer(0.5, self.on_tick)
         self.get_logger().info(
@@ -45,6 +54,13 @@ class MissionManagerNode(Node):
     def on_pose(self, msg: PoseStamped):
         p = msg.pose.position
         self.latest_pose = (p.x, p.y)
+
+    def _publish_mode(self, mode, station_target=None):
+        """helm_node의 실제 제어 입력은 이 토픽. 파일은 대시보드 표시용으로만 계속 저장."""
+        ms.save_mode(mode, station_target)
+        msg = RosString()
+        msg.data = json.dumps({"mode": mode, "station_target": station_target})
+        self.mode_pub.publish(msg)
 
     def _elapsed(self):
         return (self.get_clock().now() - self.state_since).nanoseconds / 1e9
@@ -70,7 +86,7 @@ class MissionManagerNode(Node):
             ms.save_manager_progress(self.zone_index, None, self.state)
             return
         if self.zone_index >= len(zones):
-            ms.save_mode("idle")
+            self._publish_mode("idle")
             ms.save_manager_progress(self.zone_index, None, "all_done")
             return
 
@@ -84,45 +100,45 @@ class MissionManagerNode(Node):
             self._set_state("traveling")
 
         elif self.state == "traveling":
-            ms.save_mode("goto", station_target=zone['name'])
+            self._publish_mode("goto", station_target=zone['name'])
             if dist < config.MISSION_ZONE_RADIUS_M:
                 self.get_logger().info(f"{zone['name']} 존 도착 - 스캔 시작")
                 self._set_state("scanning")
 
         elif self.state == "scanning":
-            ms.save_mode("scan")
+            self._publish_mode("scan")
             if self._elapsed() > config.MISSION_ZONE_SCAN_SEC:
                 self._set_state("executing")
 
         elif self.state == "executing":
             mtype = zone['type']
             if mtype.startswith('stationkeep'):
-                ms.save_mode("station_keep", station_target=zone['name'])
+                self._publish_mode("station_keep", station_target=zone['name'])
                 prog = ms.load_station_progress()
                 if prog.get('success') and prog.get('target') == zone['name']:
                     self.get_logger().info(f"{zone['name']} 위치유지 성공 - 다음 존으로")
                     self._advance()
             elif mtype.startswith('gate'):
-                ms.save_mode("gate_follow")
+                self._publish_mode("gate_follow")
                 path = pp.load_path()
                 progress = pp.load_progress()
                 if path and progress.get('current_gate_idx', 0) >= len(path):
                     self.get_logger().info("게이트 경로 완료 - 다음 존으로")
                     self._advance()
             elif mtype.startswith('dock'):
-                ms.save_mode("dock")
+                self._publish_mode("dock")
                 prog = ms.load_docking_progress()
                 if prog.get('docked'):
                     self.get_logger().info(f"{zone['name']} 도킹 성공 - 다음 존으로")
                     self._advance()
             elif mtype.startswith('search') or mtype.startswith('circle'):
-                ms.save_mode("search", station_target=zone['name'])
+                self._publish_mode("search", station_target=zone['name'])
                 prog = ms.load_search_progress()
                 if prog.get('success') and prog.get('target') == zone['name']:
                     self.get_logger().info(f"{zone['name']} 탐색(주회) 성공 - 다음 존으로")
                     self._advance()
             else:
-                ms.save_mode("idle")
+                self._publish_mode("idle")
                 if self._elapsed() > config.MISSION_ZONE_STUB_DWELL_SEC:
                     self.get_logger().warn(f"{zone['name']} ({mtype}) 은 아직 미구현 - 건너뜀")
                     self._advance()
