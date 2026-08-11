@@ -106,3 +106,7 @@ SEARCH_LINEAR_MAX = 0.3
 SEARCH_KP_ANGULAR = 1.2
 SEARCH_RADIAL_KP = 0.3
 SEARCH_LAPS_TARGET = 1.0
+
+# ---- 타겟 오탐 필터링 (연속 감지 확정) ----
+TARGET_CONFIRM_HITS = 3          # 같은 위치에서 이만큼 연속 감지되어야 실제 등록
+TARGET_CANDIDATE_TIMEOUT_SEC = 4.0  # 이 시간 동안 재감지 안 되면 후보 폐기
