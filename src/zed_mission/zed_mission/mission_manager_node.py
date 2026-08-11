@@ -2,7 +2,15 @@
 mission_targets 중 "zone_<순번>_<종류>" 이름의 목표를 존으로 해석해서
 순서대로: 이동(goto) -> 도착 후 스캔(scan, 제자리 회전) -> 해당 미션 수행 -> 다음 존.
 
-지원 종류: stationkeep(위치유지), gate(항로추종 경로), dock(도킹), search/circle(주회).
+지원 종류: stationkeep(위치유지), gate(항로추종, 반응형), dock(도킹), search/circle(주회),
+obstacle/avoid(장애물회피, 목표점까지 gap follower로 회피 주행).
+
+장애물회피(obstacle/avoid)는 다른 타입처럼 도착->스캔->수행 3단계가 아니라, zone
+좌표(목표점) 방향으로 "회피하며 이동" 자체가 미션이라 도착하면 바로 완료 처리.
+
+게이트(gate)는 사전계획 경로가 아니라 helm_node가 매 tick 실시간으로 전방 빨강/초록
+쌍을 찾아 중앙선 추종하는 반응형 방식 - 여기서는 그냥 모드만 켜두고, 완료 판정은
+gate_progress.json(helm_node가 "더 이상 게이트 안 보임" 감지 시 success=True 기록)으로 확인.
 
 위치유지/탐색은 zone 좌표를 그대로 쓰지 않고, zone 근처(ZONE_TARGET_MATCH_RADIUS_M
 이내)에서 실시간 감지된 buoy_*가 있으면 그걸 우선 사용한다(_resolve_live_target).
@@ -22,7 +30,6 @@ from std_msgs.msg import String as RosString
 from zed_common import config
 from zed_common import mission_targets as mt
 from zed_common import mission_state as ms
-from zed_common import path_planner as pp
 
 MODE_QOS = QoSProfile(depth=1)
 MODE_QOS.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
@@ -127,6 +134,16 @@ class MissionManagerNode(Node):
         x, y = self.latest_pose
         dist = math.hypot(zone['x'] - x, zone['y'] - y)
 
+        # 장애물회피(미션5)는 존형태(도착->스캔->수행)가 아니라 "목표점까지 회피하며
+        # 이동" 자체가 미션이라, traveling/scanning/executing 상태분기 없이 바로 처리.
+        # 도착=미션 완료.
+        if zone['type'].startswith('obstacle') or zone['type'].startswith('avoid'):
+            self._publish_mode("avoid_to_goal", station_target=zone['name'])
+            if dist < config.MISSION_ARRIVE_DIST_M:
+                self.get_logger().info(f"{zone['name']} 장애물 구간 통과 완료 - 다음 존으로")
+                self._advance()
+            return
+
         if self.state == "idle":
             self._set_state("traveling")
 
@@ -152,10 +169,9 @@ class MissionManagerNode(Node):
                     self._advance()
             elif mtype.startswith('gate'):
                 self._publish_mode("gate_follow")
-                path = pp.load_path()
-                progress = pp.load_progress()
-                if path and progress.get('current_gate_idx', 0) >= len(path):
-                    self.get_logger().info("게이트 경로 완료 - 다음 존으로")
+                prog = ms.load_gate_progress()
+                if prog.get('success'):
+                    self.get_logger().info(f"{zone['name']} 게이트 구간 종료(더 이상 안 보임) - 다음 존으로")
                     self._advance()
             elif mtype.startswith('dock'):
                 self._publish_mode("dock", station_target=zone['name'])
