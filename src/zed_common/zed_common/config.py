@@ -29,6 +29,7 @@ MAP_FRAME = "map"
 
 HTTP_HOST = "0.0.0.0"
 HTTP_PORT = 8080
+PARAMS_HTTP_PORT = 8081
 STREAM_FPS = 10
 
 # ---- 부표 탐지 (색깔/모양 기반) ----
@@ -64,6 +65,7 @@ HELM_LINEAR_MAX = 0.6
 HELM_ANGULAR_MAX = 1.0
 HELM_KP_ANGULAR = 1.2
 HELM_RATE_HZ = 10.0
+POSE_STALE_TIMEOUT_SEC = 1.0  # 이만큼 pose 갱신이 없으면 VIO 문제로 보고 정지
 
 # ---- 위치유지 (Station Keeping) ----
 MISSION_MODE_PATH = os.path.join(DATA_DIR, "mission_mode.json")
@@ -91,6 +93,9 @@ MISSION_ZONE_SCAN_SEC = 5.0
 MISSION_ZONE_SCAN_ANGULAR = 0.4
 MISSION_ZONE_STUB_DWELL_SEC = 3.0
 MISSION_MANAGER_PROGRESS_PATH = os.path.join(DATA_DIR, "mission_manager_progress.json")
+# zone 좌표(매핑 때 등록한 대략적 위치) 근처 이 반경 안에서 실시간 감지된 buoy_*가
+# 있으면 그걸 실제 미션 대상으로 우선 사용, 없으면 zone 좌표 자체로 폴백.
+ZONE_TARGET_MATCH_RADIUS_M = 5.0
 
 # ---- 도킹 (지정된 색/모양 마커에 접근) ----
 DOCKING_TARGET_PATH = os.path.join(DATA_DIR, "docking_target.json")
@@ -107,7 +112,7 @@ SEARCH_RADIUS_M = 3.0
 SEARCH_LINEAR_MAX = 0.3
 SEARCH_KP_ANGULAR = 1.2
 SEARCH_RADIAL_KP = 0.3
-SEARCH_LAPS_TARGET = 1.0
+SEARCH_LAPS_TARGET = 1.5  # 1바퀴(1.0)보다 여유있게 1.5바퀴(540도) 채워야 성공 - 안전마진
 # 규정: 빨강/초록 부표는 시계방향, 흰색 부표는 반시계방향
 SEARCH_DIRECTION_BY_COLOR = {"red": "cw", "green": "cw", "white": "ccw"}
 
