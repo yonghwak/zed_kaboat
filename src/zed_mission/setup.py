@@ -24,6 +24,7 @@ setup(
             'mission_manager_node = zed_mission.mission_manager_node:main',
             'thruster_output = zed_mission.thruster_output:main',
             'dashboard_node = zed_mission.dashboard_node:main',
+            'mission_params_node = zed_mission.mission_params_node:main',
         ],
     },
 )
