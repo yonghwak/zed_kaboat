@@ -5,7 +5,17 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 FLOOR_PLAN_IMAGE_PATH = os.path.join(DATA_DIR, "floor_plan.png")
 FLOOR_PLAN_META_PATH = os.path.join(DATA_DIR, "floor_plan_meta.json")
+FLOOR_PLAN_HITS_PATH = os.path.join(DATA_DIR, "floor_plan_hits.json")
 MISSION_TARGETS_PATH = os.path.join(DATA_DIR, "mission_targets.json")
+
+# ---- 베스트맵 저장/불러오기 ----
+SAVED_MAPS_DIR = os.path.join(DATA_DIR, "saved_maps")
+os.makedirs(SAVED_MAPS_DIR, exist_ok=True)
+# 저장/로드 시 함께 다루는 파일 4종 (히트그리드 원본이 있어야 로드 후 이어서 매핑 가능)
+BEST_MAP_FILES = ["floor_plan.png", "floor_plan_meta.json", "floor_plan_hits.json", "mission_targets.json"]
+# 이미 확정등록된 타겟(베스트맵에서 불러온 기대위치 포함) 근처에서 재감지되면
+# 새로 만들지 않고 이 비율만큼 실측값 쪽으로 이동평균 보정
+TARGET_UPDATE_ALPHA = 0.3
 
 MAP_RESOLUTION_M_PER_PX = 0.02
 MAP_MARGIN_M = 1.0
@@ -53,6 +63,11 @@ GATE_REACHED_DIST_M = 2.0     # 이 거리 안으로 들어오면 다음 게이�
 GATE_LINE_COLOR = (255, 0, 255)
 GATE_CURRENT_COLOR = (0, 140, 255)
 GATE_DONE_COLOR = (160, 160, 160)
+# ---- 미션1 반응형 게이트 추종 ----
+GATE_PROGRESS_PATH = os.path.join(DATA_DIR, "gate_progress.json")
+GATE_FRONT_CONE_DEG = 140.0     # 이 각도(전방 기준 좌우 절반씩) 안의 부표쌍만 후보로 봄
+GATE_MAX_CONSIDER_DIST_M = 15.0  # 이보다 먼 부표는 무시(오래된/먼 등록값 배제)
+GATE_END_TIMEOUT_SEC = 4.0      # 이만큼 연속으로 유효 게이트쌍이 안 보이면 미션 종료로 판정
 
 # ---- 기존 camera_node 연동 ----
 CAMERA_DETECTIONS_TOPIC = "/camera/detections"
