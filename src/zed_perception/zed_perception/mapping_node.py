@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import cv2
 import rclpy
@@ -51,6 +52,34 @@ class FloorMapper:
     def has_data(self):
         return len(self._hits) > 0
 
+    def save_hits(self, path):
+        """히트그리드 원본을 저장 - 렌더링된 png/meta만으로는 이어서 매핑할 수 없어서
+        (다시 로드해도 어디에 몇 번 찍혔는지 정보가 없음) 원본 카운트를 따로 보관."""
+        data = {
+            "resolution": self.resolution,
+            "bounds": self._bounds,
+            "hits": {f"{u},{v}": c for (u, v), c in self._hits.items()},
+        }
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+    def load_hits(self, path):
+        """이전 세션(베스트맵 등)의 히트그리드를 불러와 이어서 누적할 수 있게 시딩.
+        해상도가 다르면 좌표계가 어긋나므로 로드하지 않음."""
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return False
+        if abs(data.get("resolution", -1) - self.resolution) > 1e-9:
+            return False
+        self._hits = defaultdict(int)
+        for key, c in data.get("hits", {}).items():
+            u_str, v_str = key.split(",")
+            self._hits[(int(u_str), int(v_str))] = c
+        self._bounds = data.get("bounds")
+        return len(self._hits) > 0
+
     def build(self):
         margin = int(round(config.MAP_MARGIN_M / self.resolution))
         gu_min, gu_max, gv_min, gv_max = self._bounds
@@ -76,6 +105,11 @@ class MappingNode(Node):
         self.latest_R = None
         self.latest_T = None
         self.active = True
+
+        if self.mapper.load_hits(config.FLOOR_PLAN_HITS_PATH):
+            self.get_logger().info(
+                "기존 히트그리드(베스트맵 등) 로드 완료 - 이어서 누적합니다.")
+
         self.create_subscription(PoseStamped, config.POSE_TOPIC, self.on_pose, 20)
         self.create_subscription(PointCloud2, config.POINTCLOUD_TOPIC, self.on_cloud, 5)
         self.create_service(Trigger, 'save_floor_plan', self.on_save_service)
@@ -112,6 +146,7 @@ class MappingNode(Node):
         img, meta = self.mapper.build()
         cv2.imwrite(config.FLOOR_PLAN_IMAGE_PATH, img)
         meta.save(config.FLOOR_PLAN_META_PATH)
+        self.mapper.save_hits(config.FLOOR_PLAN_HITS_PATH)
         return True
 
     def on_autosave_timer(self):
