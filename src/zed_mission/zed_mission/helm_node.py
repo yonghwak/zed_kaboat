@@ -3,7 +3,6 @@ mission_mode 토픽(transient_local)으로 받은 모드에 따라 cmd_final(Twi
 - gate_follow: mission_path.json의 현재 게이트를 향해 이동 (기존 동작)
 - station_keep: 지정된 목표 반경(5m) 안에서 5초 연속 대기, 벗어나면 살짝 복귀
 - search: 지정된 목표를 반경만큼 거리를 두고 원형으로 주회, 1바퀴 채우면 성공
-- dock: 도킹 표식(색/모양)에 접근, 근접거리에서 일정시간 정지하면 도킹 완료
 - idle: 정지
 
 모드값은 더 이상 제어 루프에서 파일로 폴링하지 않고 mission_mode 토픽 구독으로 받는다
@@ -40,13 +39,16 @@ class HelmNode(Node):
     def __init__(self):
         super().__init__('zed_helm_node')
         self.latest_pose = None  # (x, y, yaw)
+        self.last_pose_time = None  # rclpy Time or None - pose 최신성 체크용
         self.station_hold_start = None  # rclpy Time or None
         self.dock_hold_start = None  # rclpy Time or None
         self.mode_data = {"mode": "gate_follow", "station_target": None}
+        self.mission_params = {"docking_color": None, "docking_shape": None, "search_color": "red"}
 
         self.pub = self.create_publisher(Twist, 'cmd_mission', 10)
         self.create_subscription(PoseStamped, config.POSE_TOPIC, self.on_pose, 20)
         self.create_subscription(RosString, 'mission_mode', self.on_mode, MODE_QOS)
+        self.create_subscription(RosString, 'mission_params', self.on_params, MODE_QOS)
         self.create_timer(1.0 / config.HELM_RATE_HZ, self.on_control_tick)
 
         self.get_logger().info("조향 노드 시작")
@@ -55,12 +57,20 @@ class HelmNode(Node):
         p, o = msg.pose.position, msg.pose.orientation
         yaw = quat_to_yaw(o.x, o.y, o.z, o.w)
         self.latest_pose = (p.x, p.y, yaw)
+        self.last_pose_time = self.get_clock().now()
 
     def on_mode(self, msg: RosString):
         try:
             self.mode_data = json.loads(msg.data)
         except (json.JSONDecodeError, TypeError):
             self.get_logger().warn("mission_mode 메시지 파싱 실패, 이전 모드 유지")
+
+    def on_params(self, msg: RosString):
+        try:
+            parsed = json.loads(msg.data)
+            self.mission_params.update(parsed)
+        except (json.JSONDecodeError, TypeError):
+            self.get_logger().warn("mission_params 메시지 파싱 실패, 이전 값 유지")
 
     def _bearing_dist(self, x, y, yaw, tx, ty):
         dx, dy = tx - x, ty - y
@@ -70,6 +80,15 @@ class HelmNode(Node):
 
     def on_control_tick(self):
         if self.latest_pose is None:
+            return
+        # VIO pose가 최근에 갱신 안 됐으면(예: LOST) 낡은 위치로 계속 조향하지 말고 정지.
+        # 재수신되면 last_pose_time이 다시 최신화되니 자동 복귀됨.
+        elapsed_since_pose = (self.get_clock().now() - self.last_pose_time).nanoseconds / 1e9
+        if elapsed_since_pose > config.POSE_STALE_TIMEOUT_SEC:
+            self.station_hold_start = None
+            self.dock_hold_start = None
+            self.pub.publish(Twist())
+            self.get_logger().warn("pose 갱신 끊김(VIO 문제 의심) - 정지", throttle_duration_sec=1.0)
             return
         x, y, yaw = self.latest_pose
         mode_data = self.mode_data
@@ -84,7 +103,7 @@ class HelmNode(Node):
         elif mode == "search":
             self._tick_search(x, y, yaw, mode_data.get("station_target"))
         elif mode == "dock":
-            self._tick_dock(x, y, yaw)
+            self._tick_dock(x, y, yaw, mode_data.get("station_target"))
         elif mode == "scan":
             self.station_hold_start = None
             self.dock_hold_start = None
@@ -199,7 +218,7 @@ class HelmNode(Node):
         if target_name.startswith("buoy_"):
             color = target_name.split('_')[1]
         else:
-            color = ms.load_search_color().get("color", "red")
+            color = self.mission_params.get("search_color", "red")
         direction = config.SEARCH_DIRECTION_BY_COLOR.get(color, "cw")
 
         t = targets[target_name]
@@ -226,15 +245,17 @@ class HelmNode(Node):
                                    config.SEARCH_KP_ANGULAR * tangent_bearing))
         self.pub.publish(twist)
 
-    def _tick_dock(self, x, y, yaw):
-        """docking_target.json(대시보드에서 대회 당일 공지된 색/모양으로 지정)과 일치하는
-        mission_targets의 dock_<색>_<모양>_<n> 중 가장 가까운 걸 목표로 접근.
-        DOCKING_ARRIVE_DIST_M 이내에서 DOCKING_HOLD_SEC 이상 연속 정지하면 도킹 완료."""
+    def _tick_dock(self, x, y, yaw, zone_hint=None):
+        """docking_target.json(대시보드에서 대회 당일 공지된 색/모양으로 지정)과 일치하는 표식에 접근.
+        모양이 circle이면 perception_bridge가 buoy_<색>_<n>으로 등록하므로 그쪽도 같이 찾는다
+        (그 외 모양은 dock_<색>_<모양>_<n>). zone_hint(존 이름)가 주어지면 그 존 좌표에 가장 가까운
+        후보를 우선 선택 (여러 도킹 스테이션 중 지금 이 존의 것을 정확히 집기 위함), 없으면 배 현재
+        위치 기준 최근접. DOCKING_ARRIVE_DIST_M 이내에서 DOCKING_HOLD_SEC 이상 연속 정지하면 도킹 완료."""
         self.station_hold_start = None
         twist = Twist()
 
-        dt = ms.load_docking_target()
-        color, shape = dt.get('color'), dt.get('shape')
+        dt = self.mission_params
+        color, shape = dt.get('docking_color'), dt.get('docking_shape')
         if not color or not shape:
             self.dock_hold_start = None
             ms.save_docking_progress(False, None)
@@ -242,7 +263,7 @@ class HelmNode(Node):
             return
 
         targets = mt.load_targets()
-        prefix = f"dock_{color}_{shape}"
+        prefix = f"buoy_{color}" if shape == "circle" else f"dock_{color}_{shape}"
         candidates = {n: t for n, t in targets.items() if n.startswith(prefix)}
         if not candidates:
             self.dock_hold_start = None
@@ -250,8 +271,12 @@ class HelmNode(Node):
             self.pub.publish(twist)
             return
 
-        # 여러 후보(오탐 등으로) 있으면 현재 가장 가까운 걸 선택
-        name, t = min(candidates.items(), key=lambda kv: math.hypot(kv[1]['x'] - x, kv[1]['y'] - y))
+        hint = targets.get(zone_hint) if zone_hint else None
+        if hint is not None:
+            ref_x, ref_y = hint['x'], hint['y']
+        else:
+            ref_x, ref_y = x, y
+        name, t = min(candidates.items(), key=lambda kv: math.hypot(kv[1]['x'] - ref_x, kv[1]['y'] - ref_y))
         bearing, dist = self._bearing_dist(x, y, yaw, t['x'], t['y'])
 
         now = self.get_clock().now()
