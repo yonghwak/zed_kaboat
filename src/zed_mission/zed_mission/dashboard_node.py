@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import threading
 import time
 import math
@@ -325,6 +326,33 @@ class DashboardNode(Node):
             if self.active_target == name:
                 self.active_target = next(iter(self.targets), None)
 
+    # ---- 베스트맵 저장/목록 ----
+    def save_current_map(self, name):
+        """지금 라이브 상태(floor_plan.png/meta/hits + mission_targets.json)를
+        이름 붙여 saved_maps/<name>/ 에 복사. 대회 당일 로드는 별도 스크립트로
+        launch 전에 미리 해야 함(매핑 노드가 시작 전에 파일이 준비돼 있어야
+        처음부터 다시 그리지 않고 이어서 누적함)."""
+        safe_name = "".join(c for c in name if c.isalnum() or c in ("-", "_")) or "map"
+        dest = os.path.join(config.SAVED_MAPS_DIR, safe_name)
+        os.makedirs(dest, exist_ok=True)
+        copied = []
+        for fname in config.BEST_MAP_FILES:
+            src = os.path.join(config.DATA_DIR, fname)
+            if os.path.exists(src):
+                shutil.copy(src, os.path.join(dest, fname))
+                copied.append(fname)
+        return safe_name, copied
+
+    def list_saved_maps(self):
+        if not os.path.isdir(config.SAVED_MAPS_DIR):
+            return []
+        out = []
+        for name in sorted(os.listdir(config.SAVED_MAPS_DIR)):
+            d = os.path.join(config.SAVED_MAPS_DIR, name)
+            if os.path.isdir(d):
+                out.append({"name": name, "files": sorted(os.listdir(d))})
+        return out
+
 
 app = Flask(__name__)
 node: DashboardNode = None
@@ -355,6 +383,13 @@ body{font-family:sans-serif;background:#111;color:#eee;margin:0;display:flex}
   도킹 표식(색/모양)·탐색 목표색 지정은 별도 페이지에서:
   <a href="#" id="paramsLink" style="color:#0cf">미션 파라미터 페이지</a>
   <span id="dockinfo" style="color:#0cf;display:block;margin-top:4px"></span>
+</div>
+<div style="margin-top:12px;font-size:12px">
+  <b>베스트맵 저장</b> (매핑 잘 됐을 때 이름 붙여 저장 - 불러오기는 젯슨에서
+  launch 전에 <code>load_best_map.py &lt;이름&gt;</code> 실행)<br>
+  <input id="mapName" placeholder="예: venue_v3" style="margin-top:4px">
+  <button onclick="saveMap()">현재 맵 저장</button>
+  <div id="savedMaps" style="margin-top:6px;color:#0cf;font-size:11px"></div>
 </div>
 </div>
 <div class="col"><h3>AR Camera View</h3><img src="/stream/cam"></div>
@@ -419,6 +454,21 @@ async function refreshDock(){
 refreshTargets(); setInterval(refreshTargets, 3000);
 refreshMode(); setInterval(refreshMode, 1000);
 refreshDock(); setInterval(refreshDock, 1000);
+async function saveMap(){
+  const name = document.getElementById('mapName').value.trim();
+  if(!name){ alert('맵 이름을 입력하세요'); return; }
+  const r = await fetch('/api/save_map', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name})});
+  const d = await r.json();
+  alert(d.ok ? `저장됨: ${d.name} (${d.files.join(', ')})` : '저장 실패');
+  refreshSavedMaps();
+}
+async function refreshSavedMaps(){
+  const r = await fetch('/api/list_maps'); const d = await r.json();
+  document.getElementById('savedMaps').textContent =
+    d.maps.length ? '저장된 맵: ' + d.maps.map(m=>m.name).join(', ') : '저장된 맵 없음';
+}
+refreshSavedMaps();
 </script></body></html>
 """
 
@@ -510,6 +560,18 @@ def api_register():
 def api_delete():
     node.delete_target(request.json['name'])
     return jsonify({"ok": True})
+
+
+@app.route('/api/save_map', methods=['POST'])
+def api_save_map():
+    d = request.json
+    name, files = node.save_current_map(d.get('name', 'map'))
+    return jsonify({"ok": True, "name": name, "files": files})
+
+
+@app.route('/api/list_maps')
+def api_list_maps():
+    return jsonify({"maps": node.list_saved_maps()})
 
 
 def main():
